@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="MyKalender">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0A0A0C">
+<title>MyKalender</title>
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/svg+xml" href="logo.svg">
+<!-- Öffentliche Schloss-Seite von kalender.robschman.at. Die eigentliche Kalender-Seite samt Terminen
+     liegt verschlüsselt in inhalt.js (AES-256-GCM, Schlüssel per PBKDF2-SHA-256 aus dem Passwort) und wird
+     erst hier im Browser mit dem Passwort entschlüsselt. Ohne Passwort ist nichts lesbar. -->
+<style>
+:root{--bg:#0A0A0C;--flaeche:#16171B;--linie:#2B2D34;--text:#F5F5F7;--rot:#D91E2A;--fehler:#FF8A8A;color-scheme:dark}
+*,*::before,*::after{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif}
+body{min-height:100vh;display:grid;place-items:center;padding:24px max(16px, env(safe-area-inset-right,0px)) 24px max(16px, env(safe-area-inset-left,0px))}
+.karte{width:min(360px,100%);background:var(--flaeche);border:1px solid var(--linie);border-radius:18px;padding:28px 22px 22px;display:grid;gap:14px;justify-items:center;text-align:center}
+.karte img{width:84px;height:84px;border-radius:19px}
+h1{margin:0;font-size:22px;font-weight:800}
+p{margin:0;font-size:14px;line-height:1.4}
+input[type="password"]{width:100%;font:inherit;font-size:17px;padding:12px 14px;border-radius:12px;border:1px solid var(--linie);background:#0E0F12;color:var(--text)}
+input[type="password"]:focus-visible{outline:3px solid var(--rot);outline-offset:1px}
+label{display:flex;gap:8px;align-items:center;font-size:14px}
+label input{width:18px;height:18px}
+button{width:100%;font:inherit;font-size:17px;font-weight:700;padding:12px;border:0;border-radius:12px;background:var(--rot);color:#FFFFFF;cursor:pointer}
+button:disabled{cursor:wait}
+.fehler{color:var(--fehler);font-weight:700;min-height:1.4em}
+</style>
+</head>
+<body>
+<form class="karte" id="schloss" autocomplete="on">
+  <img src="apple-touch-icon.png" alt="">
+  <h1>MyKalender</h1>
+  <p id="hinweis">Bitte Passwort eingeben.</p>
+  <input type="text" name="username" value="MyKalender" autocomplete="username" hidden>
+  <input type="password" id="pw" name="password" autocomplete="current-password" aria-label="Passwort" required>
+  <label><input type="checkbox" id="merken" checked> Auf diesem Gerät merken</label>
+  <button type="submit" id="los">Öffnen</button>
+  <p class="fehler" id="fehler" role="alert"></p>
+</form>
+<script>
+(function () {
+  'use strict';
+  const MERK = 'mykalender.pw';
+  const form = document.getElementById('schloss'), pw = document.getElementById('pw'), merken = document.getElementById('merken');
+  const los = document.getElementById('los'), fehler = document.getElementById('fehler'), hinweis = document.getElementById('hinweis');
+  const lies = () => { try { return localStorage.getItem(MERK); } catch (e) { return null; } };
+  const schreib = v => { try { if (v === null) localStorage.removeItem(MERK); else localStorage.setItem(MERK, v); } catch (e) { /* egal */ } };
+
+  // inhalt.js und stand.js immer frisch holen (der Mac lädt alle 2 Stunden neu hoch)
+  const lade = src => new Promise((ok, nein) => {
+    const s = document.createElement('script');
+    s.src = src + '?v=' + Date.now(); s.onload = ok; s.onerror = nein;
+    document.head.appendChild(s);
+  });
+  const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+
+  async function entpacke(bytes) {   // die Seite ist vor dem Verschlüsseln gepackt (Deflate)
+    for (const art of ['deflate-raw', 'deflate']) {
+      try { return await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream(art))).text(); } catch (e) { /* nächste Art */ }
+    }
+    throw new Error('entpacken');
+  }
+  async function entschluessle(passwort) {
+    const P = window.MYKALENDER;
+    const basis = await crypto.subtle.importKey('raw', new TextEncoder().encode(passwort), 'PBKDF2', false, ['deriveKey']);
+    const schluessel = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt: b64(P.salz), iterations: P.iter, hash: 'SHA-256' },
+      basis, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+    const roh = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64(P.iv) }, schluessel, b64(P.daten)));
+    return entpacke(roh);
+  }
+  function zeige(html) {
+    const stand = window.MYKALENDER_STAND ? 'window.KALENDER_STAND=' + JSON.stringify(window.MYKALENDER_STAND) + ';' : '';
+    html = html.replace('/*KALENDER_STAND*/', stand);
+    document.open(); document.write(html); document.close();
+  }
+  function bereit(text) { los.disabled = false; los.textContent = 'Öffnen'; if (text !== undefined) fehler.textContent = text; }
+
+  form.addEventListener('submit', async ev => {
+    ev.preventDefault();
+    if (!window.MYKALENDER) return;
+    los.disabled = true; los.textContent = 'Öffne …'; fehler.textContent = '';
+    let html;
+    try { html = await entschluessle(pw.value); }
+    catch (e) { bereit('Das Passwort stimmt nicht.'); pw.select(); return; }
+    schreib(merken.checked ? pw.value : null);
+    zeige(html);
+  });
+
+  if (!window.crypto || !crypto.subtle || typeof DecompressionStream === 'undefined') {
+    hinweis.textContent = 'Dieser Browser kann die Seite nicht entschlüsseln. Bitte über https://kalender.robschman.at in Safari öffnen und iOS aktualisieren.';
+    los.disabled = true;
+    return;
+  }
+  Promise.all([lade('inhalt.js'), lade('stand.js').catch(() => {})]).then(async () => {
+    if (!window.MYKALENDER) throw new Error('leer');
+    const gemerkt = lies();
+    if (gemerkt) {
+      los.disabled = true; los.textContent = 'Öffne …';
+      try { zeige(await entschluessle(gemerkt)); return; }
+      catch (e) { schreib(null); bereit('Das gespeicherte Passwort passt nicht mehr – bitte neu eingeben.'); }
+    }
+    pw.focus();
+  }).catch(() => {
+    hinweis.textContent = 'Die Termine sind noch nicht da. Der Mac lädt sie alle 2 Stunden hoch.';
+    los.disabled = true;
+  });
+})();
+</script>
+</body>
+</html>
