@@ -53,7 +53,7 @@ button:disabled{cursor:wait}
   const lies = () => { try { return localStorage.getItem(MERK); } catch (e) { return null; } };
   const schreib = v => { try { if (v === null) localStorage.removeItem(MERK); else localStorage.setItem(MERK, v); } catch (e) { /* egal */ } };
 
-  // inhalt.js und stand.js immer frisch holen (der Mac lädt alle 2 Stunden neu hoch)
+  // inhalt.js und stand.js immer frisch holen (der Mac lädt alle 30 Minuten neu hoch)
   const lade = src => new Promise((ok, nein) => {
     const s = document.createElement('script');
     s.src = src + '?v=' + Date.now(); s.onload = ok; s.onerror = nein;
@@ -108,7 +108,7 @@ button:disabled{cursor:wait}
     }
     pw.focus();
   }).catch(() => {
-    hinweis.textContent = 'Die Termine sind noch nicht da. Der Mac lädt sie alle 2 Stunden hoch.';
+    hinweis.textContent = 'Die Termine sind noch nicht da. Der Mac lädt sie alle 30 Minuten hoch.';
     los.disabled = true;
   });
 })();
